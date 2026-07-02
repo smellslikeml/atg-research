@@ -43,7 +43,7 @@ jobs:
           echo "token=$token" >> "$GITHUB_OUTPUT"
       - uses: remyxai/outrider@v1
         with:
-          interest-id: ecd1ee65-d11c-4e39-9d17-65e180b7843a
+          interest-id: d62d036b-89b7-4e3f-87d0-68ae4620ac4b
           # remyx[bot] token (empty → action falls back to GITHUB_TOKEN).
           github-token: ${{ steps.remyx-bot.outputs.token }}
           # Disable the per-repo rate-limit window so manual and scheduled
