@@ -56,6 +56,8 @@ from interactrank.constants.base_constants import WEIGHT_FIELD
 from interactrank.feature_consts import REQUEST_ID_FEATURE, USER_ID_FEATURE, SEARCH_QUERY_FEATURE,  IMAGE_SIGNATURE_FEATURE, ITEM_ID_FEATURE, IS_REPIN_FEATURE, IS_LONGCLICK_FEATURE, QUERY_SEGMENT_KEY
 from interactrank.common.types import get_label_name_for_training
 from interactrank.feature_consts import REPLAY_INPUT,REWARD_VECTOR_KEY,SCORES_KEY
+from interactrank.corpus_embedding_refiner import DEFAULT_NUDGE_STEP
+from interactrank.corpus_embedding_refiner import nudge_refine_corpus
 
 DEFAULT_MIN_NUM_ITEMS_TO_EVAL = 3000
 # recall @ k metrics
@@ -278,6 +280,8 @@ class TwoTowerLightweightEvaluator:
         user_limit: int = DEFAULT_NUM_USER_LIMIT,
         eval_user_state: bool = False,
         global_bias: np.array = None,
+        refine_corpus: bool = False,
+        nudge_step: float = DEFAULT_NUDGE_STEP,
     ):
         """
         :param input_dir: Directory storing predictions files
@@ -294,6 +298,9 @@ class TwoTowerLightweightEvaluator:
         self.user_limit = user_limit  # (query_limit)
         self.eval_user_state = eval_user_state  # see if we need this?
         self.global_bias = global_bias
+        # NUDGE-N corpus refinement (opt-in; leaves default eval numbers unchanged).
+        self.refine_corpus = refine_corpus
+        self.nudge_step = nudge_step
         # input_dir can be "" for testing.
         self.dataset = ds.dataset(input_dir, partitioning="hive") if input_dir else None
 
@@ -337,6 +344,42 @@ class TwoTowerLightweightEvaluator:
         # corpus_image_sigs is only used for visualization/debugging.
         self.corpus_image_sigs = dataframe[IMG_SIG_FIELD].to_numpy(dtype="S32") if IMG_SIG_FIELD in dataframe else None
         self.corpus_embeddings = torch.tensor(np.stack(dataframe[PIN_EMBEDDING_FIELD]), device=self.device)
+
+    def refine_corpus_embeddings(self) -> None:
+        """NUDGE-N refinement of the entity embeddings toward their positive queries.
+
+        Non-parametrically nudges each entity embedding toward the mean direction
+        of the viewer/query embeddings that positively engaged with it, raising the
+        positives' inner-product rank in ``compute_all_ranks``. The same per-entity
+        nudge is applied to both representations the recall eval scores against: the
+        negative corpus (``corpus_embeddings``) and the per-record positive pins
+        (``pin_embedding_np``), keeping them consistent. Requires ``read_data`` and
+        ``read_entity_corpus`` to have run first.
+        """
+        label_field = "engagement_" + LABEL_FIELD
+        query_embeddings = torch.from_numpy(self.query_embedding_np).to(self.device)
+        positive_entity_ids = torch.from_numpy(self.entity_ids_np).to(self.device)
+        labels = torch.from_numpy(self.labels[label_field]).to(self.device)
+
+        self.corpus_embeddings = nudge_refine_corpus(
+            corpus_embeddings=self.corpus_embeddings,
+            corpus_entity_ids=self.corpus_entity_ids,
+            query_embeddings=query_embeddings,
+            positive_entity_ids=positive_entity_ids,
+            labels=labels,
+            step=self.nudge_step,
+        )
+        # Apply the same nudge to the per-record positive pins so the positives'
+        # own scores (true_logits) reflect the refinement, not just the negatives.
+        refined_pins = nudge_refine_corpus(
+            corpus_embeddings=torch.from_numpy(self.pin_embedding_np).to(self.device),
+            corpus_entity_ids=positive_entity_ids,
+            query_embeddings=query_embeddings,
+            positive_entity_ids=positive_entity_ids,
+            labels=labels,
+            step=self.nudge_step,
+        )
+        self.pin_embedding_np = refined_pins.cpu().numpy()
 
     def compute_ranks(
         self,
@@ -440,6 +483,8 @@ def two_tower_lightweight_post_inference_fn(
         evaluator = TwoTowerLightweightEvaluator(device=device, input_dir=eval_dirs[0], global_bias=global_bias)
         evaluator.read_data()
         evaluator.read_entity_corpus()
+        if evaluator.refine_corpus:
+            evaluator.refine_corpus_embeddings()
         recall_metrics = two_tower_recall_eval(evaluator=evaluator, run_dir=model_stats_dir)
         for label_field, user_state_metrics in recall_metrics.items():
             for user_state, recall_dict in user_state_metrics.items():
