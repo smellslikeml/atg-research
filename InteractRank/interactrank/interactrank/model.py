@@ -8,6 +8,7 @@ import torch
 from torch import nn
 from interactrank.common.utils.utils import ExampleType
 from interactrank.common.mask_net import LazyParallelMaskNetLayers
+from interactrank.common.pairwise_interaction_layer import PairwiseInteractionScorer
 from interactrank.common.layers import FeatureGrouper
 from interactrank.common.layers import create_automl_continuous_normalization_layer
 from interactrank.common.layers import create_batch_dense_normalization
@@ -406,11 +407,18 @@ class CrossLayer(nn.Module):
         features: List[str],
         feature_map: Dict[str, Feature],
         enable_compute_average_navboost: bool,
+        enable_pairwise_interactions: bool = False,
+        interaction_num_bins: int = 8,
+        interaction_max_pairs: int = 0,
     ):
         """
         This layer takes in the dot product from two tower(query&pin) & the cross features to generate the final scores
         :param feature_map: a ML env feature map for a tower
         :param enable_compute_average_navboost: replace navboost features where 0 with average value of that feature column
+        :param enable_pairwise_interactions: add explicit finite-grid pairwise interaction terms over the cross features
+            (IAIML, arXiv:2607.07060) on top of the additive linear score
+        :param interaction_num_bins: number of bins per feature in the interaction grid
+        :param interaction_max_pairs: complexity budget on admitted pair terms (0 admits all pairs)
         This tower takes in the dot product and concat it with cross features to get the final scores by passing it to
         through layers.
         """
@@ -429,6 +437,15 @@ class CrossLayer(nn.Module):
         self.total_cross_features = len(features)
         print("Check features: ", self.cross_feature_keys)
         self.linear = nn.Linear(self.total_cross_features+ 1, 1)
+        self.interaction_scorer = (
+            PairwiseInteractionScorer(
+                num_features=self.total_cross_features,
+                num_bins=interaction_num_bins,
+                max_pairs=interaction_max_pairs,
+            )
+            if enable_pairwise_interactions
+            else None
+        )
         # we initialize the weights to a constant because we want the cross layer weights on the dot product to be +ve,
         # which are sensitive to +ve init. This dependency is due to a Manas side requirement
         # according to @bjuneja's past experiments
@@ -452,7 +469,10 @@ class CrossLayer(nn.Module):
         :param inputs: dict containing data passed in loss_metrics
         :return dict of summary metrics
         """
-        return {f"cross_layer_weight_{i}": weight.item() for i, weight in enumerate(self.linear.weight.reshape(-1))}
+        metrics = {f"cross_layer_weight_{i}": weight.item() for i, weight in enumerate(self.linear.weight.reshape(-1))}
+        if self.interaction_scorer is not None and self.interaction_scorer.num_pairs > 0:
+            metrics["cross_interaction_grid_abs_mean"] = self.interaction_scorer.interaction_grids.abs().mean().item()
+        return metrics
 
     def forward(self, formatted_data: Dict[str, torch.Tensor]) -> nn.Module:
         """
@@ -463,16 +483,21 @@ class CrossLayer(nn.Module):
         output = self.identity(formatted_data)
         if self.enable_compute_average_navboost:
             output = self.compute_average(output)
-        output = torch.cat(
+        cross = self.concat(output)
+        scores = torch.cat(
             [
-                self.concat(output).unsqueeze(1).expand(-1, NUM_HEADS, -1),
+                cross.unsqueeze(1).expand(-1, NUM_HEADS, -1),
                 output[DOT_PRODUCT_FEATURE_FIELD].unsqueeze(2),
             ],
             dim=2,
         )
 
-        output = self.linear(output).squeeze()
-        return output
+        scores = self.linear(scores).squeeze()
+        if self.interaction_scorer is not None:
+            # explicit finite-grid pairwise interaction terms, broadcast across heads
+            interaction = self.interaction_scorer(cross)
+            scores = scores + interaction.view(*([-1] + [1] * (scores.dim() - 1)))
+        return scores
 
 
 class MultiHeadContextTower(nn.Module):

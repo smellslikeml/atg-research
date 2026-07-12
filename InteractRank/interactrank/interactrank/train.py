@@ -309,6 +309,9 @@ class SearchLwsTrainer(PytorchDistributedTrainer):
                 features=TENSOR_FEATURES[EntityType.CROSS],
                 feature_map= cross_tower_feature_map,
                 enable_compute_average_navboost=self.app_config.enable_compute_average_navboost,
+                enable_pairwise_interactions=self.app_config.enable_pairwise_cross_interactions,
+                interaction_num_bins=self.app_config.pairwise_interaction_num_bins,
+                interaction_max_pairs=self.app_config.pairwise_interaction_max_pairs,
         )
 
         self.model = SearchTwoTowerDeployableModel(

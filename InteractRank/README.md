@@ -64,3 +64,21 @@ For question about the code or paper, please contact Bhawna Juneja (bjuneja@pint
 ## Acknowledgments
 
 This research was conducted at Pinterest. We thank the Pinterest Search team for their support and feedback.
+
+## Finite-Grid Pairwise Cross Interactions — adapted from "Complexity-Budgeted, Interaction-Aware Interpretable Model for Tabular Data" (IAIML, arXiv:2607.07060)
+
+The `CrossLayer` fuses the two-tower dot product with query-item cross features through a single linear layer — a purely additive scorer that is blind to signal emerging only from the *joint* configuration of two features. `interactrank/common/pairwise_interaction_layer.py` adds IAIML's core mechanism — **finite-grid pairwise interaction scoring** under a **complexity budget** — as explicit, learnable pair terms over the cross features:
+
+- Each feature is softly assigned to bins via learnable per-feature centers (adaptive discretization).
+- Each admitted feature pair carries a learnable `num_bins x num_bins` grid; its contribution is the bilinear form over the two soft-bin vectors.
+- The number of admitted pairs is bounded by an explicit budget; the grids are zero-initialized, so enabling the module leaves the baseline additive score untouched at step 0.
+
+Enable it from the config bundle:
+
+```python
+enable_pairwise_cross_interactions: bool = True
+pairwise_interaction_num_bins: int = 8
+pairwise_interaction_max_pairs: int = 0  # 0 admits all pairs
+```
+
+IAIML's statistical interaction *screening* is replaced by learning the grid weights jointly in the existing optimizer path; its rule/pattern-mining route and benchmark harness are out of scope.

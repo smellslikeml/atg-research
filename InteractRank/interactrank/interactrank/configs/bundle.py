@@ -76,6 +76,12 @@ class SearchMultiPassAppLwConfig:
     enable_recall_computation: bool = True
     # enable replacing average of navboost features
     enable_compute_average_navboost: bool = False
+    # enable explicit finite-grid pairwise interaction terms over cross features (IAIML, arXiv:2607.07060)
+    enable_pairwise_cross_interactions: bool = False
+    # number of bins per feature in the pairwise interaction grid
+    pairwise_interaction_num_bins: int = 8
+    # complexity budget on admitted pair terms (0 admits all pairs)
+    pairwise_interaction_max_pairs: int = 0
     # enable ingesting item side features
     enable_item_side_features: bool = True
     # calculate eval only with searchsage version, set this to searchsage version for eval, and set
