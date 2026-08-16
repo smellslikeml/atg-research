@@ -39,6 +39,29 @@ chmod 777 run.sh
 
 ```
 
+## Corpus Embedding Refinement (NUDGE)
+
+Adapted from *"NUDGE: Lightweight Non-Parametric Fine-Tuning of Embeddings for
+Retrieval"* (arXiv:2409.02343), `interactrank/corpus_embedding_refiner.py` adds
+an optional, training-free refinement pass to the lightweight recall evaluator.
+Given the labeled (query, positive-entity) pairs the evaluator already reads, it
+non-parametrically nudges each entity embedding toward the mean direction of the
+viewer queries that positively engaged with it, then re-projects onto the unit
+sphere (the NUDGE-N variant, matching the `LpNormalize` towers). This raises the
+positives' inner-product rank — the quantity `compute_all_ranks` measures —
+without touching model weights.
+
+It is opt-in and leaves default eval numbers unchanged:
+
+```python
+evaluator = TwoTowerLightweightEvaluator(
+    device=device, input_dir=eval_dir, refine_corpus=True, nudge_step=0.1
+)
+evaluator.read_data()
+evaluator.read_entity_corpus()
+evaluator.refine_corpus_embeddings()  # invoked automatically when refine_corpus=True
+```
+
 ## Citation
 
 If you use InteractRank in your research, please cite:
